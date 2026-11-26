@@ -1,35 +1,44 @@
 #!/usr/bin/env bash
-# Micat Node Guard 2.0 - public GitHub/curl bootstrap installer
+# Micat Node Guard 2.1.0 - curl | bash bootstrap
 set -Eeuo pipefail
+umask 077
 
-REPO_URL="${MICAT_REPO:-}"
+REPO_URL="${MICAT_REPO:-https://github.com/hani741/micat-node-guard.git}"
 INSTALL_DIR="${MICAT_INSTALL_DIR:-/opt/micat-node-guard}"
-
 log(){ printf '\n[Micat Node Guard] %s\n' "$*"; }
 die(){ printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 
-[[ "${EUID}" -eq 0 ]] || die "请使用 root 执行：sudo bash"
-command -v apt-get >/dev/null 2>&1 || die "当前安装器仅支持 Debian/Ubuntu（apt）"
+[[ ${EUID} -eq 0 ]] || die "请使用 root 执行"
+command -v apt-get >/dev/null 2>&1 || die "仅支持 Debian/Ubuntu（apt）"
+[[ -r /etc/os-release ]] || die "无法读取 /etc/os-release"
+. /etc/os-release
+case "${ID:-}" in debian|ubuntu) ;; *) die "仅支持 Debian/Ubuntu";; esac
 
-# When piped from curl, bootstrap by cloning the public repository.
-if [[ ! -f "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/scripts/apply.sh" ]]; then
-    [[ -n "$REPO_URL" ]] || die "请设置 MICAT_REPO，例如：MICAT_REPO=https://github.com/OWNER/micat-node-guard.git"
-    [[ "$REPO_URL" != *"YOUR_GITHUB_USERNAME"* ]] || die "请先把仓库地址中的 YOUR_GITHUB_USERNAME 替换为你的 GitHub 用户名"
-    command -v git >/dev/null 2>&1 || { apt-get update; apt-get install -y git; }
-    if [[ -d "$INSTALL_DIR/.git" ]]; then
-        log "检测到已有仓库，更新代码"
-        git -C "$INSTALL_DIR" pull --ff-only
-    else
-        if [[ -e "$INSTALL_DIR" ]]; then
-            mv "$INSTALL_DIR" "${INSTALL_DIR}.backup.$(date +%Y%m%d-%H%M%S)"
-        fi
-        git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+# BASH_SOURCE may be empty when this file is piped directly from curl.
+SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+LOCAL_MODE=0
+if [[ -n "$SCRIPT_PATH" && -f "$SCRIPT_PATH" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  [[ -f "$SCRIPT_DIR/scripts/apply.sh" ]] && LOCAL_MODE=1
+fi
+
+if [[ "$LOCAL_MODE" -eq 0 ]]; then
+  command -v git >/dev/null 2>&1 || {
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y git ca-certificates curl
+  }
+  if [[ -d "$INSTALL_DIR/.git" ]]; then
+    log "更新已有仓库代码"
+    git -C "$INSTALL_DIR" fetch --depth 1 origin
+    git -C "$INSTALL_DIR" reset --hard FETCH_HEAD
+  else
+    if [[ -e "$INSTALL_DIR" ]]; then
+      mv "$INSTALL_DIR" "${INSTALL_DIR}.backup.$(date +%Y%m%d-%H%M%S)"
     fi
-    exec bash "$INSTALL_DIR/install.sh" --local
+    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+  fi
+  exec bash "$INSTALL_DIR/install.sh" --local
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ "${1:-}" == "--local" ]]; then
-    exec bash "$SCRIPT_DIR/scripts/apply.sh"
-fi
 exec bash "$SCRIPT_DIR/scripts/apply.sh"
